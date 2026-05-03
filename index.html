@@ -1036,12 +1036,12 @@
             };
 
             const handleSaveRule = () => {
-                if (!newRule.code || !newRule.standard || !newRule.keywords) {
-                showToast('請填寫完整資訊 (代碼、標準名稱、關鍵字)');
+                if (!newRule.code || !newRule.standard) {
+                showToast('請填寫完整資訊 (代碼、標準名稱)');
                 return;
                 }
 
-                const keywordsArray = newRule.keywords.split(/[,，、]/).map(k => k.trim()).filter(k => k.length > 0);
+                const keywordsArray = newRule.keywords.split(/[,，、\n]/).map(k => k.trim()).filter(k => k.length > 0);
 
                 const ruleData = {
                 keywords: keywordsArray,
@@ -1078,7 +1078,7 @@
                 setNewRule({
                 code: rule.code,
                 standard: rule.standard,
-                keywords: rule.keywords.join(', '),
+                keywords: (rule.keywords || []).join(', '),
                 type: rule.type,
                 organ: rule.organ || 'Other',
                 note: rule.note || ''
@@ -1426,7 +1426,7 @@ nebulizer / wound dressing / 診斷證明"
                             </div>
 
                             <div>
-                                <label className="block text-xs font-bold text-slate-500 mb-1">識別關鍵字 (用逗號分隔)</label>
+                                <label className="block text-xs font-bold text-slate-500 mb-1">識別關鍵字 (選填，可用逗號或換行分隔)</label>
                                 <textarea 
                                 className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none h-20 text-sm"
                                 placeholder="例如: DM, 糖尿病, Sugar high"
@@ -1434,7 +1434,7 @@ nebulizer / wound dressing / 診斷證明"
                                 onChange={(e) => setNewRule({...newRule, keywords: e.target.value})}
                                 />
                                 <p className="text-[10px] text-slate-400 mt-1">
-                                {editingId ? '您可以在此處增修更多關鍵字。' : '系統會自動識別這些關鍵字並轉換為上方代碼。'}
+                                {editingId ? '您可以在此處增修更多關鍵字；留白也可以更新規則。' : '留白也可以儲存；有填寫時系統會用這些關鍵字輔助辨識。'}
                                 </p>
                             </div>
 
@@ -1452,11 +1452,10 @@ nebulizer / wound dressing / 診斷證明"
                             </div>
 
                             <div>
-                                <label className="block text-xs font-bold text-slate-500 mb-1">備註/警示 (選填)</label>
-                                <input 
-                                type="text" 
-                                className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none"
-                                placeholder="提示使用者注意併發症..."
+                                <label className="block text-xs font-bold text-slate-500 mb-1">備註/警示 (選填，可換行條列)</label>
+                                <textarea
+                                className="min-h-28 w-full resize-y rounded border border-slate-300 p-2 text-sm leading-relaxed outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder={"提示使用者注意事項...\n例如：\n- 需搭配病史判讀\n- 若症狀惡化建議回診"}
                                 value={newRule.note}
                                 onChange={(e) => setNewRule({...newRule, note: e.target.value})}
                                 />
@@ -1575,13 +1574,13 @@ nebulizer / wound dressing / 診斷證明"
                                     <td className="px-4 py-3 align-top">
                                     <div className="font-medium text-slate-800">{item.standard}</div>
                                     <div className="mt-1 flex flex-wrap gap-1">
-                                        {item.keywords.map((k, i) => (
+                                        {(item.keywords || []).map((k, i) => (
                                         <span key={i} className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded border border-slate-200">
                                             {k}
                                         </span>
                                         ))}
                                     </div>
-                                    {item.note && <div className="text-[10px] text-amber-600 mt-1 italic">{item.note}</div>}
+                                    {item.note && <div className="text-[10px] text-amber-600 mt-1 italic whitespace-pre-line">{item.note}</div>}
                                     </td>
                                     <td className="px-4 py-3 text-right align-top whitespace-nowrap">
                                     <button 
