@@ -1,0 +1,1624 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>門診醫令搜尋整理平台</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    animation: {
+                        'fade-in-up': 'fadeInUp 0.3s ease-out',
+                    },
+                    keyframes: {
+                        fadeInUp: {
+                            '0%': { opacity: '0', transform: 'translateY(10px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        /* 自定義捲軸樣式 */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        // --- Lucide Icon 轉接層 (修正版) ---
+        // 修正說明：Lucide 新版移除了 icon 物件上的 .toSvg() 方法
+        // 改用 lucide.createElement() 來生成 DOM，再轉為字串
+        const IconWrapper = ({ name, color, size, className, strokeWidth, ...props }) => {
+            // Lucide CDN 暴露的是 `lucide.icons` 物件
+            const iconDef = lucide.icons[name];
+            
+            if (!iconDef) {
+                console.warn(`Icon ${name} not found`);
+                return null;
+            }
+
+            try {
+                // 使用 Lucide 的 helper 建立 SVG DOM 元素
+                const svgElement = lucide.createElement(iconDef);
+
+                // 設定我們需要的屬性 (會覆蓋預設值)
+                svgElement.setAttribute('width', size || 24);
+                svgElement.setAttribute('height', size || 24);
+                svgElement.setAttribute('stroke', color || "currentColor");
+                svgElement.setAttribute('stroke-width', strokeWidth || 2);
+                
+                if (className) {
+                    // 處理既有的 class 與傳入的 className
+                    const existingClass = svgElement.getAttribute('class') || '';
+                    svgElement.setAttribute('class', `${existingClass} ${className}`.trim());
+                }
+
+                // 將其他 React props 轉為屬性
+                Object.entries(props).forEach(([key, value]) => {
+                    if (value !== undefined && value !== null) {
+                        svgElement.setAttribute(key, value);
+                    }
+                });
+
+                // 將 DOM 轉回 HTML 字串以供 React 使用
+                return <span dangerouslySetInnerHTML={{ __html: svgElement.outerHTML }} style={{ display: 'inline-flex', alignItems: 'center' }} />;
+            } catch (e) {
+                console.error(`Failed to render icon: ${name}`, e);
+                return null;
+            }
+        };
+
+        // 建立原始代碼中使用的所有 Icon 元件
+        const iconsList = [
+            'Stethoscope', 'Search', 'ArrowRight', 'FileText', 'CheckCircle', 'AlertTriangle', 
+            'Copy', 'Trash2', 'Database', 'Activity', 'XCircle', 'Download', 'Upload', 'Plus', 
+            'Save', 'Settings', 'List', 'Edit2', 'RotateCcw', 'Filter', 'ArrowUpDown', 
+            'ArrowUp', 'ArrowDown', 'Code', 'X', 'Info'
+        ];
+
+        const Icons = iconsList.reduce((acc, key) => {
+            acc[key] = (props) => <IconWrapper name={key} {...props} />;
+            return acc;
+        }, {});
+
+        const { 
+            Stethoscope, Search, ArrowRight, FileText, CheckCircle, AlertTriangle, 
+            Copy, Trash2, Database, Activity, XCircle, Download, Upload, Plus, 
+            Save, Settings, List, Edit2, RotateCcw, Filter, ArrowUpDown, 
+            ArrowUp, ArrowDown, Code, X, Info 
+        } = Icons;
+
+        // --- 原始應用程式代碼開始 ---
+
+        // 1. 提示訊息 (Toast)
+        const Toast = ({ message, onClose }) => {
+            useEffect(() => {
+                const timer = setTimeout(onClose, 3000);
+                return () => clearTimeout(timer);
+            }, [onClose]);
+
+            return (
+                <div className="fixed bottom-5 right-5 bg-slate-800 text-white px-6 py-3 rounded-lg shadow-lg flex items-center z-[100] animate-fade-in-up">
+                    <Info className="w-5 h-5 mr-3 text-blue-400" />
+                    <span className="text-sm font-medium">{message}</span>
+                    <button onClick={onClose} className="ml-4 text-slate-400 hover:text-white">
+                        <X className="w-4 h-4" />
+                    </button>
+                </div>
+            );
+        };
+
+        // 2. 確認對話框 (Modal)
+        const ConfirmModal = ({ isOpen, title, message, onConfirm, onCancel, confirmText = "確定", confirmColor = "bg-blue-600 hover:bg-blue-700" }) => {
+            if (!isOpen) return null;
+
+            return (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] backdrop-blur-sm p-4">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden transform transition-all scale-100">
+                        <div className="p-6">
+                            <h3 className="text-lg font-bold text-slate-800 mb-2">{title}</h3>
+                            <p className="text-sm text-slate-600 whitespace-pre-line leading-relaxed">{message}</p>
+                        </div>
+                        <div className="bg-slate-50 px-6 py-4 flex justify-end space-x-3">
+                            <button 
+                                onClick={onCancel}
+                                className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
+                            >
+                                取消
+                            </button>
+                            <button 
+                                onClick={onConfirm}
+                                className={`px-4 py-2 text-white rounded-lg text-sm font-medium shadow-sm transition-colors ${confirmColor}`}
+                            >
+                                {confirmText}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // 定義醫令分類
+        const ORGAN_CATEGORIES = [
+                  {
+                            "value": "Medication",
+                            "label": "藥物 (Medication)",
+                            "color": "bg-emerald-100 text-emerald-800"
+                  },
+                  {
+                            "value": "Lab",
+                            "label": "檢驗 (Laboratory)",
+                            "color": "bg-sky-100 text-sky-800"
+                  },
+                  {
+                            "value": "Imaging",
+                            "label": "影像檢查 (Imaging)",
+                            "color": "bg-indigo-100 text-indigo-800"
+                  },
+                  {
+                            "value": "Procedure",
+                            "label": "處置/治療 (Procedure)",
+                            "color": "bg-amber-100 text-amber-800"
+                  },
+                  {
+                            "value": "Injection",
+                            "label": "注射/疫苗 (Injection/Vaccine)",
+                            "color": "bg-rose-100 text-rose-800"
+                  },
+                  {
+                            "value": "Document",
+                            "label": "證明/行政 (Document)",
+                            "color": "bg-violet-100 text-violet-800"
+                  },
+                  {
+                            "value": "Other",
+                            "label": "其他 (Other)",
+                            "color": "bg-slate-100 text-slate-800"
+                  }
+        ];
+
+        // 門診常用藥物、檢查與處置代碼範例資料庫
+        const INITIAL_DATABASE = [
+                  {
+                            "id": "MED-METFORMIN-500",
+                            "code": "MED001",
+                            "standard": "Metformin 500 mg tablet",
+                            "keywords": [
+                                      "METFORMIN",
+                                      "GLUCOPHAGE",
+                                      "二甲雙胍",
+                                      "糖尿病藥",
+                                      "DM MED"
+                            ],
+                            "type": "exact",
+                            "organ": "Medication",
+                            "note": "範例院內藥碼，請依實際 HIS/藥局代碼調整。"
+                  },
+                  {
+                            "id": "MED-AMLODIPINE-5",
+                            "code": "MED002",
+                            "standard": "Amlodipine 5 mg tablet",
+                            "keywords": [
+                                      "AMLODIPINE",
+                                      "NORVASC",
+                                      "脈優",
+                                      "鈣離子阻斷劑",
+                                      "高血壓藥"
+                            ],
+                            "type": "exact",
+                            "organ": "Medication",
+                            "note": "範例院內藥碼。"
+                  },
+                  {
+                            "id": "MED-LOSARTAN-50",
+                            "code": "MED003",
+                            "standard": "Losartan 50 mg tablet",
+                            "keywords": [
+                                      "LOSARTAN",
+                                      "COZAAR",
+                                      "ARB",
+                                      "降血壓藥",
+                                      "高血壓藥"
+                            ],
+                            "type": "exact",
+                            "organ": "Medication",
+                            "note": "範例院內藥碼。"
+                  },
+                  {
+                            "id": "MED-ATORVASTATIN-20",
+                            "code": "MED004",
+                            "standard": "Atorvastatin 20 mg tablet",
+                            "keywords": [
+                                      "ATORVASTATIN",
+                                      "LIPITOR",
+                                      "STATIN",
+                                      "降血脂藥",
+                                      "高血脂藥"
+                            ],
+                            "type": "exact",
+                            "organ": "Medication",
+                            "note": "範例院內藥碼。"
+                  },
+                  {
+                            "id": "MED-EMPAGLIFLOZIN-10",
+                            "code": "MED005",
+                            "standard": "Empagliflozin 10 mg tablet",
+                            "keywords": [
+                                      "EMPAGLIFLOZIN",
+                                      "JARDIANCE",
+                                      "SGLT2",
+                                      "糖尿病藥",
+                                      "心腎保護"
+                            ],
+                            "type": "exact",
+                            "organ": "Medication",
+                            "note": "範例院內藥碼。"
+                  },
+                  {
+                            "id": "MED-ACETAMINOPHEN",
+                            "code": "MED006",
+                            "standard": "Acetaminophen tablet",
+                            "keywords": [
+                                      "ACETAMINOPHEN",
+                                      "PARACETAMOL",
+                                      "普拿疼",
+                                      "止痛藥",
+                                      "退燒藥"
+                            ],
+                            "type": "broad",
+                            "organ": "Medication",
+                            "note": "請依實際劑量與劑型建立更細項目。"
+                  },
+                  {
+                            "id": "MED-AMOXCLAV",
+                            "code": "MED007",
+                            "standard": "Amoxicillin/clavulanate tablet",
+                            "keywords": [
+                                      "AMOXICILLIN CLAVULANATE",
+                                      "AUGMENTIN",
+                                      "AMOXCLAV",
+                                      "抗生素"
+                            ],
+                            "type": "broad",
+                            "organ": "Medication",
+                            "note": "請依實際劑量與劑型建立更細項目。"
+                  },
+                  {
+                            "id": "LAB-HBA1C",
+                            "code": "09006C",
+                            "standard": "HbA1c",
+                            "keywords": [
+                                      "HBA1C",
+                                      "A1C",
+                                      "GLYCATED HEMOGLOBIN",
+                                      "糖化血色素"
+                            ],
+                            "type": "exact",
+                            "organ": "Lab",
+                            "note": "糖尿病追蹤常用檢驗；代碼請依院內/健保版本確認。"
+                  },
+                  {
+                            "id": "LAB-CBC",
+                            "code": "08011C",
+                            "standard": "Complete blood count",
+                            "keywords": [
+                                      "CBC",
+                                      "COMPLETE BLOOD COUNT",
+                                      "HEMOGRAM",
+                                      "全血球計數",
+                                      "血液常規"
+                            ],
+                            "type": "broad",
+                            "organ": "Lab",
+                            "note": "範例代碼，請依院內檢驗項目確認。"
+                  },
+                  {
+                            "id": "LAB-GLUCOSE",
+                            "code": "09005C",
+                            "standard": "Glucose",
+                            "keywords": [
+                                      "GLUCOSE",
+                                      "SUGAR",
+                                      "BLOOD SUGAR",
+                                      "AC SUGAR",
+                                      "血糖",
+                                      "飯前血糖"
+                            ],
+                            "type": "broad",
+                            "organ": "Lab",
+                            "note": "可再細分 fasting/random/postprandial glucose。"
+                  },
+                  {
+                            "id": "LAB-LIPID",
+                            "code": "LIPID",
+                            "standard": "Lipid profile",
+                            "keywords": [
+                                      "LIPID PROFILE",
+                                      "CHOLESTEROL",
+                                      "TG",
+                                      "LDL",
+                                      "HDL",
+                                      "血脂",
+                                      "膽固醇",
+                                      "三酸甘油脂"
+                            ],
+                            "type": "broad",
+                            "organ": "Lab",
+                            "note": "套組代碼請依院內設定調整。"
+                  },
+                  {
+                            "id": "LAB-CREATININE",
+                            "code": "CRE",
+                            "standard": "Creatinine/eGFR",
+                            "keywords": [
+                                      "CREATININE",
+                                      "CRE",
+                                      "EGFR",
+                                      "腎功能",
+                                      "肌酸酐"
+                            ],
+                            "type": "broad",
+                            "organ": "Lab",
+                            "note": "可搭配 BUN/eGFR 建立腎功能套組。"
+                  },
+                  {
+                            "id": "LAB-LFT",
+                            "code": "LFT",
+                            "standard": "Liver function tests",
+                            "keywords": [
+                                      "LFT",
+                                      "GOT",
+                                      "GPT",
+                                      "AST",
+                                      "ALT",
+                                      "肝功能",
+                                      "肝指數"
+                            ],
+                            "type": "broad",
+                            "organ": "Lab",
+                            "note": "套組代碼請依院內設定調整。"
+                  },
+                  {
+                            "id": "LAB-TSH",
+                            "code": "TSH",
+                            "standard": "Thyroid-stimulating hormone",
+                            "keywords": [
+                                      "TSH",
+                                      "THYROID FUNCTION",
+                                      "甲狀腺功能",
+                                      "促甲狀腺素"
+                            ],
+                            "type": "exact",
+                            "organ": "Lab",
+                            "note": "可再補 Free T4/T3。"
+                  },
+                  {
+                            "id": "LAB-URINE",
+                            "code": "URINE",
+                            "standard": "Urinalysis",
+                            "keywords": [
+                                      "URINE ROUTINE",
+                                      "U/A",
+                                      "UA",
+                                      "URINALYSIS",
+                                      "尿液檢查",
+                                      "尿液常規"
+                            ],
+                            "type": "broad",
+                            "organ": "Lab",
+                            "note": "範例代碼。"
+                  },
+                  {
+                            "id": "IMG-CXR",
+                            "code": "33070C",
+                            "standard": "Chest X-ray",
+                            "keywords": [
+                                      "CXR",
+                                      "CHEST X RAY",
+                                      "CHEST XRAY",
+                                      "胸部X光",
+                                      "胸片"
+                            ],
+                            "type": "broad",
+                            "organ": "Imaging",
+                            "note": "實際代碼可能依 PA/lateral/view 數不同。"
+                  },
+                  {
+                            "id": "IMG-ABD-SONO",
+                            "code": "19001C",
+                            "standard": "Abdominal ultrasound",
+                            "keywords": [
+                                      "ABDOMINAL SONO",
+                                      "ABD SONO",
+                                      "ABDOMINAL ULTRASOUND",
+                                      "腹部超音波"
+                            ],
+                            "type": "broad",
+                            "organ": "Imaging",
+                            "note": "範例代碼，請依院內影像項目確認。"
+                  },
+                  {
+                            "id": "IMG-ECHO",
+                            "code": "18005C",
+                            "standard": "Echocardiography",
+                            "keywords": [
+                                      "ECHO",
+                                      "CARDIAC ECHO",
+                                      "ECHOCARDIOGRAPHY",
+                                      "心臟超音波"
+                            ],
+                            "type": "broad",
+                            "organ": "Imaging",
+                            "note": "可再細分 transthoracic/TEE。"
+                  },
+                  {
+                            "id": "IMG-EKG",
+                            "code": "18001C",
+                            "standard": "Electrocardiogram",
+                            "keywords": [
+                                      "EKG",
+                                      "ECG",
+                                      "ELECTROCARDIOGRAM",
+                                      "心電圖"
+                            ],
+                            "type": "exact",
+                            "organ": "Procedure",
+                            "note": "常見門診檢查/處置項目。"
+                  },
+                  {
+                            "id": "IMG-BMD",
+                            "code": "BMD",
+                            "standard": "Bone mineral density",
+                            "keywords": [
+                                      "BMD",
+                                      "DEXA",
+                                      "DXA",
+                                      "BONE DENSITY",
+                                      "骨密度"
+                            ],
+                            "type": "broad",
+                            "organ": "Imaging",
+                            "note": "範例代碼。"
+                  },
+                  {
+                            "id": "PROC-NEBULIZER",
+                            "code": "PROC001",
+                            "standard": "Nebulizer inhalation therapy",
+                            "keywords": [
+                                      "NEBULIZER",
+                                      "NEB",
+                                      "霧化治療",
+                                      "蒸氣治療",
+                                      "吸入治療"
+                            ],
+                            "type": "exact",
+                            "organ": "Procedure",
+                            "note": "請填入實際處置/健保代碼。"
+                  },
+                  {
+                            "id": "PROC-WOUND-DRESSING",
+                            "code": "PROC002",
+                            "standard": "Wound dressing",
+                            "keywords": [
+                                      "WOUND DRESSING",
+                                      "DRESSING CHANGE",
+                                      "換藥",
+                                      "傷口換藥"
+                            ],
+                            "type": "broad",
+                            "organ": "Procedure",
+                            "note": "可依傷口大小或複雜度拆分。"
+                  },
+                  {
+                            "id": "PROC-SUTURE-REMOVAL",
+                            "code": "PROC003",
+                            "standard": "Suture removal",
+                            "keywords": [
+                                      "SUTURE REMOVAL",
+                                      "REMOVE STITCH",
+                                      "拆線"
+                            ],
+                            "type": "exact",
+                            "organ": "Procedure",
+                            "note": "請填入實際處置代碼。"
+                  },
+                  {
+                            "id": "PROC-EAR-IRRIGATION",
+                            "code": "PROC004",
+                            "standard": "Ear irrigation/cerumen removal",
+                            "keywords": [
+                                      "EAR IRRIGATION",
+                                      "CERUMEN REMOVAL",
+                                      "EAR WAX",
+                                      "耳垢清除",
+                                      "耳沖洗"
+                            ],
+                            "type": "broad",
+                            "organ": "Procedure",
+                            "note": "請依院內處置項目調整。"
+                  },
+                  {
+                            "id": "INJ-FLU-VACCINE",
+                            "code": "VAC001",
+                            "standard": "Influenza vaccine",
+                            "keywords": [
+                                      "FLU SHOT",
+                                      "FLU VACCINE",
+                                      "INFLUENZA VACCINE",
+                                      "流感疫苗"
+                            ],
+                            "type": "exact",
+                            "organ": "Injection",
+                            "note": "疫苗品項與批號通常需由院內系統管理。"
+                  },
+                  {
+                            "id": "INJ-IM-INJECTION",
+                            "code": "INJ001",
+                            "standard": "Intramuscular injection",
+                            "keywords": [
+                                      "IM INJECTION",
+                                      "I.M.",
+                                      "肌肉注射"
+                            ],
+                            "type": "broad",
+                            "organ": "Injection",
+                            "note": "可依藥品另外建立。"
+                  },
+                  {
+                            "id": "DOC-DIAGNOSIS-CERT",
+                            "code": "DOC001",
+                            "standard": "Diagnosis certificate",
+                            "keywords": [
+                                      "DIAGNOSIS CERTIFICATE",
+                                      "MEDICAL CERTIFICATE",
+                                      "項目證明",
+                                      "項目書"
+                            ],
+                            "type": "exact",
+                            "organ": "Document",
+                            "note": "行政文件項目。"
+                  },
+                  {
+                            "id": "DOC-REFERRAL",
+                            "code": "DOC002",
+                            "standard": "Referral form",
+                            "keywords": [
+                                      "REFERRAL",
+                                      "TRANSFER FORM",
+                                      "轉診單",
+                                      "轉診"
+                            ],
+                            "type": "exact",
+                            "organ": "Document",
+                            "note": "行政文件項目。"
+                  }
+        ];
+
+        // 模擬的藥物/無關詞彙過濾清單
+        const IGNORE_LIST = [
+            'ASPIRIN', 'PLAVIX', 'METFORMIN', 'LASIX', 'KCL', 'N/S', 'BOKEY', 'NORVASC', 
+            'LIPITOR', 'INSULIN', 'ANTIBIOTICS', 'IV', 'PO', 'BID', 'QID', 'TID', 'PRN', 
+            'ADMISSION', 'DISCHARGE', 'MBD', 'OBSERVATION', 'VITALS', 'BP', 'HR', 'RR', 'BT',
+            'CURRENT MEDICATIONS', 'ALLERGIES', 'PLAN', 'SOAP'
+        ];
+
+        const App = () => {
+            // 隱藏的文件上傳 ref
+            const fileInputRef = useRef(null);
+
+            // Modal 和 Toast 狀態
+            const [modalConfig, setModalConfig] = useState(null);
+            const [toastMessage, setToastMessage] = useState(null);
+
+            const showToast = (msg) => {
+                setToastMessage(msg);
+            };
+
+            // 核心狀態：Lazy Initialization
+            // 合併 localStorage 與最新內建資料，避免舊瀏覽器快取漏掉新醫令項目。
+            const [database, setDatabase] = useState(() => {
+                let initialData = [...INITIAL_DATABASE];
+                try {
+                const savedDb = localStorage.getItem('clinic_code_search_db');
+                if (savedDb) {
+                    const parsed = JSON.parse(savedDb);
+                    if (Array.isArray(parsed)) {
+                        initialData = [...parsed, ...INITIAL_DATABASE];
+                    }
+                }
+                } catch (e) {
+                console.error("Failed to load initial DB", e);
+                }
+
+                // 關鍵修正：確保 id 唯一性
+                const uniqueMap = new Map();
+                initialData.forEach(item => {
+                if (!uniqueMap.has(item.id)) {
+                    uniqueMap.set(item.id, {
+                        ...item,
+                        organ: item.organ || 'Other' 
+                    });
+                }
+                });
+                
+                return Array.from(uniqueMap.values());
+            });
+
+            const [inputText, setInputText] = useState('');
+            const [results, setResults] = useState([]);
+            const [cursorPosition, setCursorPosition] = useState(0);
+            const [isSuggestionOpen, setIsSuggestionOpen] = useState(false);
+            
+            // UI 狀態
+            const [activeTab, setActiveTab] = useState('coding'); 
+            const [isProcessing, setIsProcessing] = useState(false);
+            const [progressStep, setProgressStep] = useState(0); 
+
+            // 排序狀態
+            const [sortConfig, setSortConfig] = useState({ key: 'code', direction: 'asc' });
+
+            // 編輯模式狀態
+            const [editingId, setEditingId] = useState(null);
+
+            // 新增/編輯規則表單
+            const [newRule, setNewRule] = useState({
+                code: '',
+                standard: '',
+                keywords: '',
+                type: 'exact',
+                organ: 'Other', 
+                note: ''
+            });
+
+            // 自動保存：當 database 變更時，同步寫入 localStorage
+            useEffect(() => {
+                localStorage.setItem('clinic_code_search_db', JSON.stringify(database));
+            }, [database]);
+
+            // --- 重置/備份/還原/開發者 功能區 ---
+
+            // 智慧重置：保留使用者自訂資料，只還原內建資料
+            const handleSmartResetDb = () => {
+                setModalConfig({
+                title: '確認重置',
+                message: '確定要還原系統預設值嗎？\n不用擔心！您的「自訂規則」會被保留下來，只有內建的規則會被重置到最新版本。',
+                confirmText: '執行重置',
+                confirmColor: 'bg-red-600 hover:bg-red-700',
+                onConfirm: () => {
+                    const initialIds = new Set(INITIAL_DATABASE.map(item => item.id));
+                    const customRules = database.filter(item => !initialIds.has(item.id));
+                    
+                    // 合併時也要注意去重複
+                    const mergedDb = [...customRules, ...INITIAL_DATABASE];
+                    const uniqueMap = new Map();
+                    mergedDb.forEach(item => {
+                        if(!uniqueMap.has(item.id)){
+                            uniqueMap.set(item.id, item);
+                        }
+                    });
+
+                    setDatabase(Array.from(uniqueMap.values()));
+                    setModalConfig(null);
+                    showToast(`重置完成！保留了 ${customRules.length} 筆自訂規則。`);
+                },
+                onCancel: () => setModalConfig(null)
+                });
+            };
+
+            // 匯出資料庫 (Backup JSON File)
+            const handleExportDb = () => {
+                const dataStr = JSON.stringify(database, null, 2);
+                const blob = new Blob([dataStr], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `clinic_code_backup_${new Date().toISOString().slice(0, 10)}.json`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                showToast('資料庫備份檔 (.json) 已下載！');
+            };
+
+            // 開發者功能：匯出完整資料庫內容 (Copy to Clipboard for Code Update)
+            const handleCopyForDeveloper = () => {
+                // 移除 isCustom 標記，保持資料乾淨，以便貼回 INITIAL_DATABASE
+                const cleanDb = database.map(({ isCustom, ...rest }) => rest);
+                const jsonString = JSON.stringify(cleanDb, null, 2);
+                
+                navigator.clipboard.writeText(jsonString).then(() => {
+                showToast('已複製完整資料庫內容！');
+                });
+            };
+
+            // 匯入資料庫 (Restore)
+            const handleImportClick = () => {
+                fileInputRef.current.click();
+            };
+
+            const handleFileChange = (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                try {
+                    const importedData = JSON.parse(e.target.result);
+                    if (Array.isArray(importedData)) {
+                    setModalConfig({
+                        title: '確認匯入',
+                        message: `確定要匯入 ${importedData.length} 筆規則嗎？\n這將會覆蓋您目前的資料庫。`,
+                        confirmText: '匯入',
+                        onConfirm: () => {
+                        // 匯入時同樣進行去重複檢查
+                        const uniqueMap = new Map();
+                        importedData.forEach(item => {
+                            if(item.id && !uniqueMap.has(item.id)){
+                                uniqueMap.set(item.id, item);
+                            }
+                        });
+                        setDatabase(Array.from(uniqueMap.values()));
+                        setModalConfig(null);
+                        showToast('資料庫匯入成功！');
+                        },
+                        onCancel: () => {
+                        setModalConfig(null);
+                        // reset file input
+                        if(fileInputRef.current) fileInputRef.current.value = '';
+                        }
+                    });
+                    } else {
+                    showToast('匯入失敗：檔案格式不正確。');
+                    }
+                } catch (error) {
+                    showToast('匯入失敗：無法讀取檔案。');
+                    console.error(error);
+                }
+                };
+                reader.readAsText(file);
+                event.target.value = ''; // Ensure onChange fires again for same file if needed
+            };
+
+            // -------------------------
+
+            const requestSort = (key) => {
+                let direction = 'asc';
+                if (sortConfig.key === key && sortConfig.direction === 'asc') {
+                direction = 'desc';
+                }
+                setSortConfig({ key, direction });
+            };
+
+            const sortedDatabase = useMemo(() => {
+                let sortableItems = [...database];
+                if (sortConfig.key) {
+                sortableItems.sort((a, b) => {
+                    let valA = a[sortConfig.key] || '';
+                    let valB = b[sortConfig.key] || '';
+                    
+                    if (sortConfig.key === 'organ') {
+                    if (valA === 'Other') return 1;
+                    if (valB === 'Other') return -1;
+                    }
+
+                    if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
+                    if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+                    return 0;
+                });
+                }
+                return sortableItems;
+            }, [database, sortConfig]);
+
+            const getActiveSearchTerm = () => {
+                const textBeforeCursor = inputText.slice(0, cursorPosition);
+                const activeSegment = textBeforeCursor.split(/[\n,;，、/:()?]+/).pop().trim();
+
+                if (activeSegment.length < 2 || !/[A-Za-z]/.test(activeSegment)) {
+                    return '';
+                }
+
+                return activeSegment;
+            };
+
+            const liveSearchTerm = getActiveSearchTerm();
+
+            const liveSuggestions = useMemo(() => {
+                if (!liveSearchTerm) return [];
+
+                const query = liveSearchTerm.toUpperCase();
+
+                return database
+                    .map(entry => {
+                        const searchableTerms = [
+                            entry.code,
+                            entry.standard,
+                            ...(entry.keywords || [])
+                        ].filter(Boolean);
+
+                        let bestScore = 0;
+                        let matchedText = '';
+
+                        searchableTerms.forEach(term => {
+                            const normalized = String(term).toUpperCase();
+                            let score = 0;
+
+                            if (normalized === query) {
+                                score = 120;
+                            } else if (normalized.startsWith(query)) {
+                                score = 90;
+                            } else if (normalized.includes(query)) {
+                                score = 55;
+                            }
+
+                            if (entry.code.toUpperCase().startsWith(query)) {
+                                score += 20;
+                            }
+
+                            if (score > bestScore) {
+                                bestScore = score;
+                                matchedText = term;
+                            }
+                        });
+
+                        return bestScore > 0 ? { ...entry, bestScore, matchedText } : null;
+                    })
+                    .filter(Boolean)
+                    .sort((a, b) => b.bestScore - a.bestScore || a.code.localeCompare(b.code))
+                    .slice(0, 8);
+            }, [database, liveSearchTerm]);
+
+            const handleInputChange = (event) => {
+                setInputText(event.target.value);
+                setCursorPosition(event.target.selectionStart);
+                setIsSuggestionOpen(true);
+            };
+
+            const handleInputCursorChange = (event) => {
+                setCursorPosition(event.target.selectionStart);
+                setIsSuggestionOpen(true);
+            };
+
+            const insertSuggestion = (suggestion) => {
+                const textBeforeCursor = inputText.slice(0, cursorPosition);
+                const textAfterCursor = inputText.slice(cursorPosition);
+                const segmentStart = Math.max(
+                    textBeforeCursor.lastIndexOf('\n'),
+                    textBeforeCursor.lastIndexOf(','),
+                    textBeforeCursor.lastIndexOf(';'),
+                    textBeforeCursor.lastIndexOf('，'),
+                    textBeforeCursor.lastIndexOf('、'),
+                    textBeforeCursor.lastIndexOf('/'),
+                    textBeforeCursor.lastIndexOf(':')
+                ) + 1;
+                const prefix = inputText.slice(0, segmentStart);
+                const insertion = `${suggestion.code} ${suggestion.standard}`;
+                const nextText = `${prefix}${insertion}${textAfterCursor}`;
+
+                setInputText(nextText);
+                setCursorPosition(prefix.length + insertion.length);
+                setIsSuggestionOpen(false);
+            };
+
+            const handleAnalyze = () => {
+                if (!inputText.trim()) return;
+                
+                setIsProcessing(true);
+                setResults([]);
+                setProgressStep(1);
+
+                setTimeout(() => {
+                setProgressStep(2);
+                setTimeout(() => {
+                    setProgressStep(3);
+                    setTimeout(() => {
+                    performCoding();
+                    setIsProcessing(false);
+                    setProgressStep(0);
+                    }, 500);
+                }, 500);
+                }, 500);
+            };
+
+            const performCoding = () => {
+                // 增加切割符號：斜線(/), 冒號(:), 括號()
+                const protectedInputText = inputText.replace(/\b([A-Z]\d{2})\.(\d[A-Z0-9]*)\b/gi, '$1§$2');
+                const segments = protectedInputText
+                    .split(/[\n,;，、。/:().?]+/)
+                    .map(s => s.replace(/§/g, '.').trim())
+                    .filter(s => s.length > 0);
+                const newResults = [];
+                const usedCodes = new Set();
+
+                const processSegment = (rawSegment) => {
+                const cleanSegment = rawSegment.toUpperCase();
+                if (cleanSegment.length < 2) return;
+                
+                const isIgnored = IGNORE_LIST.some(ignore => {
+                    // 如果是短縮寫 (如 PO, IV, BP)，必須全字匹配
+                    if (ignore.length <= 4) {
+                        const escapedIgnore = ignore.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                        const regex = new RegExp(`\\b${escapedIgnore}\\b`);
+                        return regex.test(cleanSegment);
+                    }
+                    // 長單字則維持寬鬆匹配
+                    return cleanSegment.includes(ignore);
+                });
+
+                if (isIgnored) return;
+
+                let match = null;
+                let highestRelevance = 0;
+
+                database.forEach(entry => {
+                    const searchableTerms = [
+                        entry.code,
+                        entry.standard,
+                        ...(entry.keywords || [])
+                    ].filter(Boolean);
+
+                    searchableTerms.forEach(keyword => {
+                    const k = keyword.toUpperCase();
+                    let isMatch = false;
+
+                    const isEnglishKeyword = /^[A-Z0-9\s\-\.]+$/.test(k);
+
+                    if (isEnglishKeyword) {
+                        const escapedK = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                        const regex = new RegExp(`\\b${escapedK}\\b`);
+                        isMatch = regex.test(cleanSegment);
+                    } else {
+                        isMatch = cleanSegment.includes(k);
+                    }
+
+                    if (isMatch) {
+                        let currentScore = k.length;
+                        
+                        if (cleanSegment === k) {
+                            currentScore += 100;
+                        }
+
+                        if (currentScore > highestRelevance) {
+                        highestRelevance = currentScore;
+                        match = { ...entry, original: rawSegment };
+                        }
+                    }
+                    });
+                });
+
+                if (match) {
+                    if (!usedCodes.has(match.code)) {
+                    newResults.push(match);
+                    usedCodes.add(match.code);
+                    }
+                }
+                };
+
+                segments.forEach(seg => {
+                processSegment(seg);
+                });
+
+                setResults(newResults);
+            };
+
+            const handleSaveRule = () => {
+                if (!newRule.code || !newRule.standard || !newRule.keywords) {
+                showToast('請填寫完整資訊 (代碼、標準名稱、關鍵字)');
+                return;
+                }
+
+                const keywordsArray = newRule.keywords.split(/[,，、]/).map(k => k.trim()).filter(k => k.length > 0);
+
+                const ruleData = {
+                keywords: keywordsArray,
+                standard: newRule.standard,
+                code: newRule.code,
+                type: newRule.type,
+                organ: newRule.organ,
+                note: newRule.note,
+                isCustom: true 
+                };
+
+                if (editingId) {
+                setDatabase(prev => prev.map(item => {
+                    if (item.id === editingId) {
+                    return { ...item, ...ruleData };
+                    }
+                    return item;
+                }));
+                showToast('更新成功！已保存至瀏覽器。');
+                handleCancelEdit();
+                } else {
+                const newItem = {
+                    id: Date.now().toString(),
+                    ...ruleData
+                };
+                setDatabase(prev => [newItem, ...prev]); 
+                showToast('新增成功！已保存至瀏覽器。');
+                setNewRule({ code: '', standard: '', keywords: '', type: 'exact', organ: 'Other', note: '' });
+                }
+            };
+
+            const handleEditRule = (rule) => {
+                setEditingId(rule.id);
+                setNewRule({
+                code: rule.code,
+                standard: rule.standard,
+                keywords: rule.keywords.join(', '),
+                type: rule.type,
+                organ: rule.organ || 'Other',
+                note: rule.note || ''
+                });
+            };
+
+            const handleCancelEdit = () => {
+                setEditingId(null);
+                setNewRule({ code: '', standard: '', keywords: '', type: 'exact', organ: 'Other', note: '' });
+            };
+
+            const handleDeleteRule = (id) => {
+                setModalConfig({
+                title: '刪除確認',
+                message: '確定要刪除這條規則嗎？此動作無法復原。',
+                confirmText: '刪除',
+                confirmColor: 'bg-red-600 hover:bg-red-700',
+                onConfirm: () => {
+                    setDatabase(prev => prev.filter(item => item.id !== id));
+                    if (editingId === id) {
+                    handleCancelEdit();
+                    }
+                    setModalConfig(null);
+                    showToast('規則已刪除');
+                },
+                onCancel: () => setModalConfig(null)
+                });
+            };
+
+            const clearAll = () => {
+                setInputText('');
+                setResults([]);
+                setProgressStep(0);
+            };
+
+            const copyToClipboard = () => {
+                const text = results.map(r => `${r.code} - ${r.standard}`).join('\n');
+                navigator.clipboard.writeText(text);
+                showToast('搜尋結果已複製到剪貼簿');
+            };
+
+            const getOrganColor = (organValue) => {
+                const category = ORGAN_CATEGORIES.find(c => c.value === organValue);
+                return category ? category.color : 'bg-slate-100 text-slate-800';
+            };
+            
+            const getOrganLabel = (organValue) => {
+                const category = ORGAN_CATEGORIES.find(c => c.value === organValue);
+                return category ? category.label.split(' ')[0] : organValue; 
+            };
+
+            const SortIcon = ({ colKey }) => {
+                if (sortConfig.key !== colKey) return <ArrowUpDown className="w-3 h-3 ml-1 text-slate-300" />;
+                return sortConfig.direction === 'asc' 
+                ? <ArrowUp className="w-3 h-3 ml-1 text-blue-600" /> 
+                : <ArrowDown className="w-3 h-3 ml-1 text-blue-600" />;
+            };
+
+            return (
+                <div className="min-h-screen bg-slate-50 font-sans text-slate-800 relative">
+                {/* Hidden File Input for Import */}
+                <input 
+                    type="file" 
+                    ref={fileInputRef} 
+                    onChange={handleFileChange} 
+                    style={{ display: 'none' }} 
+                    accept=".json"
+                />
+
+                {/* Global Modals & Toasts */}
+                <ConfirmModal 
+                    isOpen={!!modalConfig} 
+                    {...modalConfig} 
+                />
+                
+                {toastMessage && (
+                    <Toast 
+                    message={toastMessage} 
+                    onClose={() => setToastMessage(null)} 
+                    />
+                )}
+
+                {/* Header */}
+                <header className="bg-blue-900 text-white shadow-lg sticky top-0 z-50">
+                    <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                        <Stethoscope className="w-8 h-8 text-blue-300" />
+                        <div>
+                        <h1 className="text-xl font-bold tracking-wide">門診醫令搜尋整理平台</h1>
+                        <p className="text-xs text-blue-200">Medication / Lab / Procedure Code Assistant</p>
+                        </div>
+                    </div>
+                    
+                    <div className="flex bg-blue-800 rounded-lg p-1 space-x-1">
+                        <button 
+                        onClick={() => setActiveTab('coding')}
+                        className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center ${
+                            activeTab === 'coding' ? 'bg-white text-blue-900 shadow-sm' : 'text-blue-200 hover:bg-blue-700'
+                        }`}
+                        >
+                        <Search className="w-4 h-4 mr-2" />
+                        醫令搜尋
+                        </button>
+                        <button 
+                        onClick={() => setActiveTab('database')}
+                        className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center ${
+                            activeTab === 'database' ? 'bg-white text-blue-900 shadow-sm' : 'text-blue-200 hover:bg-blue-700'
+                        }`}
+                        >
+                        <Database className="w-4 h-4 mr-2" />
+                        資料庫管理
+                        </button>
+                    </div>
+                    </div>
+                </header>
+
+                {/* Main Content */}
+                <main className="max-w-7xl mx-auto px-4 py-6 h-[calc(100vh-90px)]">
+                    
+                    {/* VIEW 1: CODING WORKSPACE */}
+                    {activeTab === 'coding' && (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-full">
+                        {/* Left Panel: Input */}
+                        <div className="flex flex-col space-y-4 h-full">
+                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 flex-1 flex flex-col p-4">
+                            <div className="flex justify-between items-center mb-2">
+                            <label className="text-sm font-bold text-slate-700 flex items-center">
+                                <FileText className="w-4 h-4 mr-2 text-blue-600" />
+                                搜尋文字 / 門診需求
+                            </label>
+                            <div className="text-xs text-slate-400">支援中文、英文、商品名、縮寫與院內代碼</div>
+                            </div>
+                            
+                            <div className="relative flex-1 min-h-0">
+                            <textarea
+                            className="h-full w-full p-4 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none resize-none font-mono text-sm leading-relaxed"
+                            placeholder="輸入藥物、檢查、處置或常用縮寫...
+例如：
+metformin
+HbA1c / CXR / EKG
+nebulizer / wound dressing / 診斷證明"
+                            value={inputText}
+                            onChange={handleInputChange}
+                            onClick={handleInputCursorChange}
+                            onKeyUp={handleInputCursorChange}
+                            onFocus={() => setIsSuggestionOpen(true)}
+                            onBlur={() => setTimeout(() => setIsSuggestionOpen(false), 120)}
+                            />
+
+                            {isSuggestionOpen && liveSuggestions.length > 0 && (
+                                <div className="absolute left-3 right-3 top-3 z-30 overflow-hidden rounded-lg border border-blue-100 bg-white shadow-xl shadow-blue-900/10">
+                                <div className="flex items-center justify-between border-b border-slate-100 bg-blue-50 px-3 py-2">
+                                    <div className="flex items-center text-xs font-bold text-blue-800">
+                                    <Search className="mr-1.5 h-3.5 w-3.5" />
+                                    即時搜尋：{liveSearchTerm}
+                                    </div>
+                                    <span className="text-[11px] text-blue-500">點選可插入項目</span>
+                                </div>
+                                <div className="max-h-72 overflow-y-auto">
+                                    {liveSuggestions.map(item => (
+                                    <button
+                                        key={`${item.id}-${item.code}`}
+                                        type="button"
+                                        onMouseDown={(event) => {
+                                        event.preventDefault();
+                                        insertSuggestion(item);
+                                        }}
+                                        className="flex w-full items-start gap-3 border-b border-slate-100 px-3 py-2.5 text-left transition-colors last:border-b-0 hover:bg-blue-50"
+                                    >
+                                        <span className="mt-0.5 shrink-0 rounded bg-blue-600 px-2 py-1 font-mono text-xs font-bold text-white">
+                                        {item.code}
+                                        </span>
+                                        <span className="min-w-0 flex-1">
+                                        <span className="block truncate text-sm font-semibold text-slate-800">{item.standard}</span>
+                                        <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+                                            {item.organ && item.organ !== 'Other' && (
+                                            <span className={`rounded-full px-2 py-0.5 ${getOrganColor(item.organ)}`}>
+                                                {getOrganLabel(item.organ)}
+                                            </span>
+                                            )}
+                                            {item.matchedText && (
+                                            <span className="truncate">符合：{item.matchedText}</span>
+                                            )}
+                                        </span>
+                                        </span>
+                                    </button>
+                                    ))}
+                                </div>
+                                </div>
+                            )}
+                            </div>
+                            
+                            <div className="mt-4 flex space-x-3">
+                            <button 
+                                onClick={handleAnalyze}
+                                disabled={isProcessing || !inputText}
+                                className={`flex-1 py-3 rounded-lg font-bold shadow-sm flex items-center justify-center transition-all ${
+                                isProcessing || !inputText 
+                                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed' 
+                                    : 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-200'
+                                }`}
+                            >
+                                {isProcessing ? (
+                                <span className="flex items-center">
+                                    <span className="animate-spin mr-2">●</span> 分析中...
+                                </span>
+                                ) : (
+                                <span className="flex items-center">
+                                    <Search className="w-5 h-5 mr-2" /> 開始搜尋與整理
+                                </span>
+                                )}
+                            </button>
+                            <button onClick={clearAll} className="px-4 py-3 bg-white border border-slate-300 text-slate-600 rounded-lg hover:bg-slate-50">
+                                <Trash2 className="w-5 h-5" />
+                            </button>
+                            </div>
+                        </div>
+                        </div>
+
+                        {/* Right Panel: Output */}
+                        <div className="flex flex-col h-full overflow-hidden">
+                        {isProcessing && (
+                            <div className="mb-4 bg-white p-4 rounded-xl shadow-sm border border-slate-200 animate-pulse">
+                            <div className="flex justify-between text-xs font-bold text-slate-500 mb-2">
+                                <span className={progressStep >= 1 ? 'text-blue-600' : ''}>1. Extraction</span>
+                                <span className={progressStep >= 2 ? 'text-blue-600' : ''}>2. Normalization</span>
+                                <span className={progressStep >= 3 ? 'text-blue-600' : ''}>3. Coding</span>
+                            </div>
+                            <div className="w-full bg-slate-100 rounded-full h-2">
+                                <div className="bg-blue-500 h-2 rounded-full transition-all duration-300" style={{ width: `${progressStep * 33.3}%` }}></div>
+                            </div>
+                            </div>
+                        )}
+
+                        <div className="flex-1 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
+                            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                            <h2 className="font-bold text-slate-700 flex items-center">
+                                <List className="w-4 h-4 mr-2 text-green-600" />
+                                搜尋結果
+                            </h2>
+                            {results.length > 0 && (
+                                <button onClick={copyToClipboard} className="flex items-center text-xs bg-white border border-slate-300 px-3 py-1.5 rounded hover:bg-slate-50 text-slate-600">
+                                <Copy className="w-3 h-3 mr-1" /> 複製
+                                </button>
+                            )}
+                            </div>
+
+                            <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-50/50">
+                            {results.length === 0 && !isProcessing && (
+                                <div className="h-full flex flex-col items-center justify-center text-slate-400">
+                                <Activity className="w-16 h-16 mb-4 opacity-20" />
+                                <p>請輸入藥名、檢查、處置或關鍵字</p>
+                                </div>
+                            )}
+
+                            {results.map((item, index) => (
+                                <div key={index} className={`relative p-4 rounded-lg border-l-4 shadow-sm bg-white ${
+                                item.type === 'unknown' ? 'border-l-red-400 border border-red-100' :
+                                item.type === 'broad' ? 'border-l-amber-400 border border-amber-100' : 
+                                'border-l-green-500 border border-slate-100'
+                                }`}>
+                                <div className="flex justify-between items-start mb-2">
+                                    <div className="flex flex-col">
+                                    <span className="text-xs font-mono bg-slate-100 text-slate-500 px-2 py-0.5 rounded w-fit mb-1">原始: {item.original}</span>
+                                    {item.organ && item.organ !== 'Other' && (
+                                        <span className={`text-[10px] w-fit px-2 py-0.5 rounded-full ${getOrganColor(item.organ)}`}>
+                                        {getOrganLabel(item.organ)}
+                                        </span>
+                                    )}
+                                    </div>
+                                    <span className={`text-xl font-bold font-mono ${item.type === 'unknown' ? 'text-red-600' : 'text-blue-700'}`}>{item.code}</span>
+                                </div>
+                                <h3 className="text-lg font-semibold text-slate-800 mb-1">{item.standard}</h3>
+                                {item.note && (
+                                    <div className="mt-2 text-xs flex items-start bg-amber-50 text-amber-800 p-2 rounded">
+                                    <AlertTriangle className="w-3 h-3 mr-1.5 mt-0.5 flex-shrink-0" />
+                                    {item.note}
+                                    </div>
+                                )}
+                                </div>
+                            ))}
+                            </div>
+                        </div>
+                        </div>
+                    </div>
+                    )}
+
+                    {/* VIEW 2: DATABASE MANAGER */}
+                    {activeTab === 'database' && (
+                    <div className="h-full flex flex-col lg:flex-row gap-6">
+                        {/* Add/Edit Rule Panel */}
+                        <div className="lg:w-1/3 flex flex-col space-y-4">
+                        <div className={`rounded-xl shadow-sm border p-5 overflow-y-auto transition-colors ${
+                            editingId ? 'bg-amber-50 border-amber-200' : 'bg-white border-slate-200'
+                        }`}>
+                            <h2 className={`text-lg font-bold mb-4 flex items-center ${
+                            editingId ? 'text-amber-800' : 'text-slate-800'
+                            }`}>
+                            {editingId ? (
+                                <>
+                                <Edit2 className="w-5 h-5 mr-2" /> 編輯規則
+                                </>
+                            ) : (
+                                <>
+                                <Plus className="w-5 h-5 mr-2 text-blue-600" /> 新增編碼規則
+                                </>
+                            )}
+                            </h2>
+                            
+                            <div className="space-y-4">
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                <label className="block text-xs font-bold text-slate-500 mb-1">代碼 (Code)</label>
+                                <input 
+                                    type="text" 
+                                    className="w-full p-2 border border-slate-300 rounded font-mono focus:ring-2 focus:ring-blue-500 outline-none"
+                                    placeholder="e.g. E11.9"
+                                    value={newRule.code}
+                                    onChange={(e) => setNewRule({...newRule, code: e.target.value})}
+                                />
+                                </div>
+                                <div>
+                                <label className="block text-xs font-bold text-slate-500 mb-1">分類 (Category)</label>
+                                <select 
+                                    className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+                                    value={newRule.organ}
+                                    onChange={(e) => setNewRule({...newRule, organ: e.target.value})}
+                                >
+                                    {ORGAN_CATEGORIES.map(cat => (
+                                    <option key={cat.value} value={cat.value}>{cat.label}</option>
+                                    ))}
+                                </select>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 mb-1">項目名稱 (Standard Term)</label>
+                                <input 
+                                type="text" 
+                                className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none"
+                                placeholder="e.g. Type 2 diabetes mellitus"
+                                value={newRule.standard}
+                                onChange={(e) => setNewRule({...newRule, standard: e.target.value})}
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 mb-1">識別關鍵字 (用逗號分隔)</label>
+                                <textarea 
+                                className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none h-20 text-sm"
+                                placeholder="例如: DM, 糖尿病, Sugar high"
+                                value={newRule.keywords}
+                                onChange={(e) => setNewRule({...newRule, keywords: e.target.value})}
+                                />
+                                <p className="text-[10px] text-slate-400 mt-1">
+                                {editingId ? '您可以在此處增修更多關鍵字。' : '系統會自動識別這些關鍵字並轉換為上方代碼。'}
+                                </p>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 mb-1">匹配類型 (Type)</label>
+                                <select 
+                                className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+                                value={newRule.type}
+                                onChange={(e) => setNewRule({...newRule, type: e.target.value})}
+                                >
+                                <option value="exact">Exact (精確)</option>
+                                <option value="broad">Broad (廣泛/需細分)</option>
+                                <option value="context">Context (背景資訊)</option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 mb-1">備註/警示 (選填)</label>
+                                <input 
+                                type="text" 
+                                className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none"
+                                placeholder="提示使用者注意併發症..."
+                                value={newRule.note}
+                                onChange={(e) => setNewRule({...newRule, note: e.target.value})}
+                                />
+                            </div>
+
+                            <div className="flex space-x-2">
+                                {editingId && (
+                                <button 
+                                    onClick={handleCancelEdit}
+                                    className="flex-1 py-2 bg-white border border-slate-300 text-slate-600 rounded-lg font-bold hover:bg-slate-50 transition-colors flex items-center justify-center"
+                                >
+                                    <XCircle className="w-4 h-4 mr-2" />
+                                    取消
+                                </button>
+                                )}
+                                <button 
+                                onClick={handleSaveRule}
+                                className={`flex-1 py-2 text-white rounded-lg font-bold shadow-md transition-colors flex items-center justify-center ${
+                                    editingId ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'
+                                }`}
+                                >
+                                <Save className="w-4 h-4 mr-2" />
+                                {editingId ? '更新規則' : '儲存到規則庫'}
+                                </button>
+                            </div>
+                            </div>
+                        </div>
+
+                        <div className="bg-blue-50 rounded-xl p-4 text-xs text-blue-800 border border-blue-100">
+                            <p>💡 提示：您可以利用排序依照分類或代碼整理規則，方便快速查找。</p>
+                        </div>
+                        </div>
+
+                        {/* Existing Rules List */}
+                        <div className="flex-1 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
+                        {/* Header with Sort Controls */}
+                        <div className="p-4 border-b border-slate-100 flex flex-col gap-3 bg-slate-50">
+                            <div className="flex justify-between items-center">
+                            <h2 className="font-bold text-slate-700">目前規則庫 ({sortedDatabase.length})</h2>
+                            
+                            {/* Action Buttons */}
+                            <div className="flex items-center space-x-2">
+                                <button onClick={handleExportDb} className="text-xs flex items-center text-blue-600 hover:bg-blue-50 px-2 py-1 rounded border border-blue-200 transition-colors" title="備份資料庫 (.json)">
+                                <Download className="w-3 h-3 mr-1" /> 備份
+                                </button>
+                                <button onClick={handleImportClick} className="text-xs flex items-center text-emerald-600 hover:bg-emerald-50 px-2 py-1 rounded border border-emerald-200 transition-colors" title="還原資料庫 (.json)">
+                                <Upload className="w-3 h-3 mr-1" /> 匯入
+                                </button>
+                                <button onClick={handleCopyForDeveloper} className="text-xs flex items-center text-purple-600 hover:bg-purple-50 px-2 py-1 rounded border border-purple-200 transition-colors" title="複製完整資料庫 (給開發者)">
+                                <Code className="w-3 h-3 mr-1" /> 給開發者
+                                </button>
+                                <div className="h-4 w-px bg-slate-300 mx-1"></div>
+                                <button onClick={handleSmartResetDb} className="text-xs text-red-500 hover:text-red-700 underline flex items-center" title="重置為系統預設值 (保留自訂規則)">
+                                <RotateCcw className="w-3 h-3 mr-1" /> 重置預設值
+                                </button>
+                            </div>
+                            </div>
+                            
+                            {/* Sort Control Bar */}
+                            <div className="flex items-center gap-2 text-xs">
+                            <span className="text-slate-500 font-bold">排序方式 (Sort by):</span>
+                            <div className="flex bg-white rounded border border-slate-200 p-0.5">
+                                <button 
+                                onClick={() => requestSort('code')}
+                                className={`px-3 py-1 rounded flex items-center transition-colors ${
+                                    sortConfig.key === 'code' ? 'bg-blue-100 text-blue-700 font-bold' : 'text-slate-600 hover:bg-slate-50'
+                                }`}
+                                >
+                                Code <SortIcon colKey="code" />
+                                </button>
+                                <button 
+                                onClick={() => requestSort('organ')}
+                                className={`px-3 py-1 rounded flex items-center transition-colors ${
+                                    sortConfig.key === 'organ' ? 'bg-blue-100 text-blue-700 font-bold' : 'text-slate-600 hover:bg-slate-50'
+                                }`}
+                                >
+                                Organ <SortIcon colKey="organ" />
+                                </button>
+                                <button 
+                                onClick={() => requestSort('standard')}
+                                className={`px-3 py-1 rounded flex items-center transition-colors ${
+                                    sortConfig.key === 'standard' ? 'bg-blue-100 text-blue-700 font-bold' : 'text-slate-600 hover:bg-slate-50'
+                                }`}
+                                >
+                                Term <SortIcon colKey="standard" />
+                                </button>
+                            </div>
+                            </div>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-0">
+                            <table className="w-full text-sm text-left">
+                            <thead className="text-xs text-slate-500 uppercase bg-slate-50 sticky top-0 shadow-sm z-10">
+                                <tr>
+                                <th className="px-4 py-3 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => requestSort('code')}>
+                                    <div className="flex items-center">Code / Organ <SortIcon colKey="code" /></div>
+                                </th>
+                                <th className="px-4 py-3 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => requestSort('standard')}>
+                                    <div className="flex items-center">Term & Keywords <SortIcon colKey="standard" /></div>
+                                </th>
+                                <th className="px-4 py-3 text-right">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {sortedDatabase.map((item) => (
+                                <tr key={item.id} className={`hover:bg-slate-50 ${editingId === item.id ? 'bg-amber-50' : ''}`}>
+                                    <td className="px-4 py-3 font-mono align-top w-32">
+                                    <div className="font-bold text-blue-700">{item.code}</div>
+                                    {/* 顯示 Organ 標籤 */}
+                                    <div className={`mt-1 text-[10px] w-fit px-1.5 py-0.5 rounded ${getOrganColor(item.organ)}`}>
+                                        {getOrganLabel(item.organ || 'Other')}
+                                    </div>
+                                    {item.type === 'broad' && <div className="mt-1 text-[10px] bg-amber-100 text-amber-800 px-1 rounded w-fit">Broad</div>}
+                                    {item.type === 'context' && <div className="mt-1 text-[10px] bg-purple-100 text-purple-800 px-1 rounded w-fit">Context</div>}
+                                    </td>
+                                    <td className="px-4 py-3 align-top">
+                                    <div className="font-medium text-slate-800">{item.standard}</div>
+                                    <div className="mt-1 flex flex-wrap gap-1">
+                                        {item.keywords.map((k, i) => (
+                                        <span key={i} className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded border border-slate-200">
+                                            {k}
+                                        </span>
+                                        ))}
+                                    </div>
+                                    {item.note && <div className="text-[10px] text-amber-600 mt-1 italic">{item.note}</div>}
+                                    </td>
+                                    <td className="px-4 py-3 text-right align-top whitespace-nowrap">
+                                    <button 
+                                        onClick={() => handleEditRule(item)}
+                                        className={`p-1 rounded transition-colors mr-2 ${
+                                        editingId === item.id 
+                                            ? 'text-amber-600 bg-amber-100' 
+                                            : 'text-slate-400 hover:text-blue-600 hover:bg-blue-50'
+                                        }`}
+                                        title="編輯"
+                                    >
+                                        <Edit2 className="w-4 h-4" />
+                                    </button>
+                                    <button 
+                                        onClick={() => handleDeleteRule(item.id)}
+                                        className="text-slate-400 hover:text-red-500 p-1 rounded hover:bg-red-50 transition-colors"
+                                        title="刪除"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
+                                    </td>
+                                </tr>
+                                ))}
+                            </tbody>
+                            </table>
+                        </div>
+                        </div>
+                    </div>
+                    )}
+
+                </main>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
